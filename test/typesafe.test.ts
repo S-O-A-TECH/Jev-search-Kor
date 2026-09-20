@@ -1,0 +1,264 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { systemOne, TypeSafeError, type JevBinding, type JudgeConfig } from '@/lib/typesafe';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+type Call = { url: string; headers: Record<string, string>; body: Record<string, unknown> };
+
+function stubFetch(handler: (call: Call) => Response | Promise<Response>): Call[] {
+  const calls: Call[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const call: Call = {
+        url: String(input),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+      };
+      calls.push(call);
+      return handler(call);
+    })
+  );
+  return calls;
+}
+
+function json(status: number, data: unknown) {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function fakeBinding(run: JevBinding['run']): JevBinding & { run: ReturnType<typeof vi.fn> } {
+  return { run: vi.fn(run) } as JevBinding & { run: ReturnType<typeof vi.fn> };
+}
+
+const one = (provider: JudgeConfig['providers'][number]): JudgeConfig => ({ providers: [provider] });
+
+const QUESTIONS = {
+  window: { type: 'choice' as const, instructions: 'How recent?', criteria: { any: 'Any time', '7d': 'Past week' } },
+  source_reddit: {
+    type: 'noul' as const,
+    instructions: 'Wants Reddit?',
+    criteria: { true: 'Mentions Reddit', false: 'Does not' },
+  },
+  plain: { type: 'noul' as const, instructions: 'No criteria' },
+};
+
+const NATIVE = {
+  model: 'jev-1.13.0',
+  answers: {
+    window: { type: 'choice', choice: '7d', probabilities: { any: 0.2, '7d': 0.8 }, confidence: 0.74 },
+    source_reddit: { type: 'noul', noul: 0.91 },
+    plain: { type: 'noul', noul: 0.07 },
+  },
+  usage: { input_tokens: 123, output_tokens: 4 },
+};
+
+describe('TypeSafe provider', () => {
+  it.each([
+    [503, 'Jev is temporarily unavailable. Please try again shortly.'],
+    [529, 'Jev is temporarily unavailable. Please try again shortly.'],
+    [429, 'Jev is receiving too many requests. Please try again shortly.'],
+    [402, 'Jev could not process this request (HTTP 402).'],
+    [401, 'Jev could not process this request (HTTP 401).'],
+  ])('shows a readable message for HTTP %i without exposing the provider body', async (status, message) => {
+    stubFetch(() => json(status, { detail: { error_type: 'billing_error', message: 'Internal request details' } }));
+    await expect(systemOne(one({ provider: 'typesafe', apiKey: 'test' }), 'test', {})).rejects.toMatchObject({
+      status,
+      message,
+      provider: 'typesafe',
+    });
+  });
+
+  it('posts to api.typesafe.ai with the model and untouched questions', async () => {
+    const calls = stubFetch(() => json(200, NATIVE));
+    const res = await systemOne(one({ provider: 'typesafe', apiKey: 'ts-key' }), { request: 'x' }, QUESTIONS);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(calls[0]!.headers.authorization).toBe('Bearer ts-key');
+    expect(calls[0]!.body).toEqual({ state: { request: 'x' }, model: 'jev-latest', questions: QUESTIONS });
+    expect(res).toEqual({ ...NATIVE, provider: 'typesafe' });
+  });
+});
+
+describe('Cloudflare Workers AI provider', () => {
+  it('runs typesafe/jev through the binding and returns the native shape', async () => {
+    const ai = fakeBinding(async () => NATIVE);
+    const res = await systemOne(one({ provider: 'cloudflare', ai }), { request: 'x' }, QUESTIONS);
+    expect(ai.run).toHaveBeenCalledTimes(1);
+    const [model, inputs, options] = ai.run.mock.calls[0]!;
+    expect(model).toBe('typesafe/jev');
+    expect(inputs).toEqual({ state: { request: 'x' }, questions: QUESTIONS });
+    expect(options).toEqual({});
+    expect(res).toEqual({ ...NATIVE, provider: 'cloudflare' });
+  });
+
+  it('honours a custom model and forwards the abort signal', async () => {
+    const ai = fakeBinding(async () => NATIVE);
+    const controller = new AbortController();
+    await systemOne(one({ provider: 'cloudflare', ai, model: 'typesafe/jev-latest' }), 'x', QUESTIONS, controller.signal);
+    const [model, , options] = ai.run.mock.calls[0]!;
+    expect(model).toBe('typesafe/jev-latest');
+    expect(options).toEqual({ signal: controller.signal });
+  });
+
+  it('fills in missing model and usage', async () => {
+    const ai = fakeBinding(async () => ({ answers: NATIVE.answers }));
+    const res = await systemOne(one({ provider: 'cloudflare', ai }), 'x', QUESTIONS);
+    expect(res.model).toBe('typesafe/jev');
+    expect(res.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+  });
+
+  it.each([
+    ['AiGatewayError: 2021: Insufficient AI Gateway credits', 402],
+    ['InferenceUpstreamError: 2049: Insufficient balance; add money to your gateway or use BYOK', 402],
+    ['AiError: Rate limit exceeded for model', 429],
+    ['InferenceUpstreamError: 503 Service Unavailable', 503],
+    ['AiError: 400 Bad Request', 400],
+    ['something exploded', 502],
+  ])('maps the binding error "%s" to HTTP %i', async (message, status) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ai = fakeBinding(async () => {
+      throw new Error(message);
+    });
+    await expect(systemOne(one({ provider: 'cloudflare', ai }), 'x', QUESTIONS)).rejects.toMatchObject({
+      status,
+      provider: 'cloudflare',
+    });
+  });
+});
+
+describe('Vercel AI Gateway provider', () => {
+  const config = one({ provider: 'vercel', apiKey: 'vc-key' });
+
+  it('posts to the gateway evaluation endpoint with noul questions as boolean', async () => {
+    const calls = stubFetch(() =>
+      json(200, {
+        answers: {
+          window: { type: 'choice', choice: '7d', probabilities: { any: 0.2, '7d': 0.8 } },
+          source_reddit: { type: 'boolean', probability: 0.91 },
+          plain: { type: 'boolean', probability: 0.07 },
+        },
+        usage: { inputTokens: 123, outputTokens: 4 },
+        providerMetadata: { typesafe: { confidence: { window: 0.74 } } },
+      })
+    );
+    const res = await systemOne(config, { request: 'x' }, QUESTIONS);
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.url).toBe('https://ai-gateway.vercel.sh/v4/ai/evaluation-model');
+    expect(call.headers.authorization).toBe('Bearer vc-key');
+    expect(call.headers['ai-model-id']).toBe('typesafe-ai/jev');
+    expect(call.headers['ai-evaluation-model-specification-version']).toBe('4');
+    expect(call.headers['ai-gateway-auth-method']).toBe('api-key');
+    expect(call.body).toEqual({
+      state: { request: 'x' },
+      questions: {
+        window: QUESTIONS.window,
+        source_reddit: {
+          type: 'boolean',
+          instructions: 'Wants Reddit?',
+          criteria: { true: 'Mentions Reddit', false: 'Does not' },
+        },
+        plain: { type: 'boolean', instructions: 'No criteria' },
+      },
+    });
+    expect(call.body).not.toHaveProperty('model');
+    expect(res).toEqual({ ...NATIVE, model: 'typesafe-ai/jev', provider: 'vercel' });
+  });
+
+  it('honours a custom gateway model and falls back to the chosen probability without metadata', async () => {
+    const calls = stubFetch(() => json(200, { answers: { window: { type: 'choice', choice: 'any' } } }));
+    const res = await systemOne(one({ provider: 'vercel', apiKey: 'vc', model: 'typesafe-ai/jev-latest' }), 'x', QUESTIONS);
+    expect(calls[0]!.headers['ai-model-id']).toBe('typesafe-ai/jev-latest');
+    expect(res.answers.window).toEqual({ type: 'choice', choice: 'any', probabilities: { any: 1 }, confidence: 1 });
+    expect(res.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+  });
+
+  it('reports gateway failures with the same readable messages', async () => {
+    stubFetch(() => json(401, { error: { message: 'Authentication failed', type: 'authentication_error' } }));
+    await expect(systemOne(config, 'x', QUESTIONS)).rejects.toMatchObject({
+      status: 401,
+      message: 'Jev could not process this request (HTTP 401).',
+      provider: 'vercel',
+    });
+  });
+});
+
+describe('provider chain', () => {
+  function chain(ai: JevBinding): JudgeConfig {
+    return {
+      providers: [
+        { provider: 'typesafe', apiKey: 'ts-key' },
+        { provider: 'cloudflare', ai },
+        { provider: 'vercel', apiKey: 'vc-key' },
+      ],
+    };
+  }
+
+  it.each([402, 429, 503])('moves to the next provider after HTTP %i', async (status) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ai = fakeBinding(async () => NATIVE);
+    const calls = stubFetch(() => json(status, { detail: { message: 'No credits' } }));
+    const res = await systemOne(chain(ai), 'x', QUESTIONS);
+    expect(calls.map((c) => new URL(c.url).host)).toEqual(['api.typesafe.ai']);
+    expect(res.provider).toBe('cloudflare');
+  });
+
+  it('walks the whole chain when every earlier provider is out', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ai = fakeBinding(async () => {
+      throw new Error('2049: Insufficient balance');
+    });
+    const calls = stubFetch((call) =>
+      call.url.includes('typesafe.ai')
+        ? json(402, {})
+        : json(200, { answers: { plain: { type: 'boolean', probability: 0.5 } } })
+    );
+    const res = await systemOne(chain(ai), 'x', { plain: QUESTIONS.plain });
+    expect(calls.map((c) => new URL(c.url).host)).toEqual(['api.typesafe.ai', 'ai-gateway.vercel.sh']);
+    expect(ai.run).toHaveBeenCalledTimes(1);
+    expect(res.provider).toBe('vercel');
+    expect(res.answers.plain).toEqual({ type: 'noul', noul: 0.5 });
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      '[jev] typesafe returned HTTP 402; retrying with cloudflare',
+      '[jev] cloudflare binding failed: HTTP 402',
+      '[jev] cloudflare returned HTTP 402; retrying with vercel',
+    ]);
+  });
+
+  it('does not fall back on client errors such as HTTP 401', async () => {
+    const ai = fakeBinding(async () => NATIVE);
+    const calls = stubFetch(() => json(401, {}));
+    await expect(systemOne(chain(ai), 'x', QUESTIONS)).rejects.toBeInstanceOf(TypeSafeError);
+    expect(calls).toHaveLength(1);
+    expect(ai.run).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the last error when every provider fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ai = fakeBinding(async () => {
+      throw new Error('Insufficient balance');
+    });
+    stubFetch((call) => json(call.url.includes('typesafe.ai') ? 402 : 429, {}));
+    await expect(systemOne(chain(ai), 'x', QUESTIONS)).rejects.toMatchObject({ status: 429, provider: 'vercel' });
+  });
+
+  it('does not fall back once the request was aborted', async () => {
+    const controller = new AbortController();
+    const ai = fakeBinding(async () => NATIVE);
+    const calls = stubFetch(() => {
+      controller.abort();
+      return json(503, {});
+    });
+    await expect(systemOne(chain(ai), 'x', QUESTIONS, controller.signal)).rejects.toMatchObject({ status: 503 });
+    expect(calls).toHaveLength(1);
+    expect(ai.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty chain', async () => {
+    await expect(systemOne({ providers: [] }, 'x', QUESTIONS)).rejects.toThrow(/No Jev provider/);
+  });
+});

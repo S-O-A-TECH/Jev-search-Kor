@@ -1,0 +1,8 @@
+# 실제 키는 이 예제가 아닌 보호된 .dev.vars / 배포 환경 secret에 등록합니다.
+TAVILY_API_KEY=
+NAVER_CLIENT_ID=
+NAVER_CLIENT_SECRET=
+TYPESAFE_API_KEY=
+JEV_PROVIDERS=typesafe
+# 원격 서버 간 요청의 Bearer 토큰. 브라우저 번들에 넣지 마세요.
+SEARCH_API_TOKEN=

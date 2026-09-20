@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fffafd" />
+    <title>Jev Search Kor</title>
+    <style>
+      :root { color-scheme: light; background: #fffafd; color: #211b20; }
+      :root.dark { color-scheme: dark; background: #191619; color: #f7f0f5; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main { max-width: 22rem; padding: 1.5rem; text-align: center; }
+      h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+      p { margin: 0.75rem 0 0; color: #756b73; }
+      :root.dark p { color: #af9eaa; }
+      a { color: #1a0dab; }
+      :root.dark a { color: #8ab4f8; }
+    </style>
+    <script>
+      (() => {
+        const root = document.documentElement;
+        let theme;
+        try { theme = localStorage.getItem('jev-theme'); } catch {}
+        const dark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        root.classList.toggle('dark', dark);
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = dark ? '#191619' : '#fffafd';
+      })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Jev Search Kor</h1>
+      <p>검색하려면 인터넷에 연결해야 합니다.</p>
+      <p><a href="/">다시 시도</a></p>
+    </main>
+  </body>
+</html>

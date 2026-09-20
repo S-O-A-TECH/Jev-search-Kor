@@ -1,0 +1,53 @@
+{
+  "id": "/",
+  "name": "Jev Search Kor",
+  "short_name": "Jev Search Kor",
+  "description": "Tavily·네이버 병렬 검색과 Jev의 한국어 근거 평가.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#e551ba",
+  "theme_color": "#fffafd",
+  "lang": "ko",
+  "dir": "ltr",
+  "orientation": "any",
+  "categories": ["productivity"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "새 검색",
+      "url": "/",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "share_target": {
+    "action": "/search",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "text": "q"
+    }
+  },
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  }
+}

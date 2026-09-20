@@ -1,0 +1,170 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: light;
+  --radius: 1.5rem;
+  --background: #fffafd;
+  --foreground: #211b20;
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0 0);
+  --primary: #e551ba;
+  --primary-text: #a8207c;
+  --primary-foreground: #171717;
+  --secondary: #f7f2f6;
+  --secondary-foreground: #211b20;
+  --muted: #f7f2f6;
+  --muted-foreground: #756b73;
+  --accent: #fbe9f5;
+  --accent-foreground: #211b20;
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: #e9dce6;
+  --input: #e9dce6;
+  --ring: #e551ba;
+  --link: #1a0dab;
+  --visited: #681da8;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #191619;
+  --foreground: #f7f0f5;
+  --card: #221d21;
+  --card-foreground: #f7f0f5;
+  --popover: #221d21;
+  --popover-foreground: #f7f0f5;
+  --primary: #e551ba;
+  --primary-text: #f089d2;
+  --primary-foreground: #171717;
+  --secondary: #2c232a;
+  --secondary-foreground: #f7f0f5;
+  --muted: #2c232a;
+  --muted-foreground: #af9eaa;
+  --accent: #392231;
+  --accent-foreground: #f7f0f5;
+  --destructive: oklch(0.7 0.19 22);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: #e551ba;
+  --link: #8ab4f8;
+  --visited: #c58af9;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-text: var(--primary-text);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-link: var(--link);
+  --color-visited: var(--visited);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Browser surfaces carry the brand too. */
+  ::selection { background: color-mix(in oklch, var(--primary) 22%, transparent); }
+  :root { caret-color: var(--primary); accent-color: var(--primary); }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  a { text-underline-offset: 3px; }
+}
+
+/* The one display voice, for the home headline only. */
+.display {
+  font-family: 'Newsreader', Georgia, 'Times New Roman', serif;
+  font-weight: 500;
+  font-optical-sizing: auto;
+}
+
+/* ---- motion ---------------------------------------------------------- */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-fast: 160ms;
+  --dur: 220ms;
+  --dur-focal: 320ms;
+}
+
+/* The search box and wordmark keep their identity across the home → results
+   navigation: the browser morphs them instead of swapping pages. */
+.vt-searchbox { view-transition-name: searchbox; }
+.vt-wordmark { view-transition-name: wordmark; }
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: var(--dur); }
+::view-transition-old(searchbox),
+::view-transition-new(searchbox),
+::view-transition-old(wordmark),
+::view-transition-new(wordmark) {
+  animation-duration: var(--dur-focal);
+  animation-timing-function: var(--ease-out);
+}
+::view-transition-old(searchbox),
+::view-transition-old(wordmark) { animation-name: none; opacity: 0; }
+
+/* A result group arriving: a plain fade. Transition (not keyframes) so a
+   re-render can retarget it; @starting-style supplies the from-state. */
+.enter {
+  opacity: 1;
+  transition: opacity var(--dur) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* The working block folding to its one-line summary: height and opacity
+   together, interruptible (a transition, not keyframes). */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--dur-focal) var(--ease-in-out), opacity var(--dur) var(--ease-out);
+}
+.fold[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.fold > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Chips: state changes are colour, not movement. */
+.chip {
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out);
+}
+.chip:active { transform: scale(0.97); }
+
+
+@media (prefers-reduced-motion: reduce) {
+  .enter { transition-duration: 120ms; }
+  .fold { transition-duration: 120ms; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 120ms; animation-name: none; }
+}
